@@ -3,77 +3,95 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
-import { TrendingUp, TrendingDown, Users, FileText, ChartBar as BarChart3, MessageSquare, ArrowRight, Clock } from 'lucide-react';
+import { TrendingUp, TrendingDown, Users, FileText, BarChart3, MessageSquare, ArrowRight, Clock } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer } from 'recharts';
 
 export function DashboardView() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(true);
-  const [sourceTitles, setSourceTitles] = useState([]);
-  const [selectedSource, setSelectedSource] = useState('');
+  const [sourceTitles, setSourceTitles] = useState<string[]>([]);
   const [sentimentData, setSentimentData] = useState<any[]>([]);
   const [totalComments, setTotalComments] = useState(0);
   const [loadingSentiment, setLoadingSentiment] = useState(true);
-  const [wordcloudImage, setWordcloudImage] = useState('');
-  const [loadingWordcloud, setLoadingWordcloud] = useState(false);
+  const [topComments, setTopComments] = useState<string[]>([]);
 
+  const SENTIMENT_COLORS: { [key: string]: string } = {
+    'Positive': '#22c55e',
+    'Neutral': '#facc15',
+    'Negative': '#ef4444',
+    'Suggestive': '#3b82f6'
+  };
 
-  const getSentimentColor = (category: string) => {
-  switch (category.toLowerCase()) {
-    case 'positive': return 'bg-green-500';
-    case 'neutral': return 'bg-yellow-500';
-    case 'negative': return 'bg-red-500';
-    case 'suggestive': return 'bg-blue-500';
-    default: return 'bg-gray-500';
-  }
-};
+  const fetchGlobalSentimentData = async () => {
+    setLoadingSentiment(true);
+    try {
+      const sourcesRes = await fetch('http://localhost:8000/sources/');
+      const sourcesData = await sourcesRes.json();
+      const titles: string[] = sourcesData.available_source_titles || [];
 
-const fetchSentimentData = async (source: string) => {
-  setLoadingSentiment(true);
-  try {
-    const url = source 
-      ? `http://localhost:8000/records/${encodeURIComponent(source)}`
-      : `http://localhost:8000/records/all`; // adjust if your API differs
-    const res = await fetch(url);
-    const data = await res.json();
+      let aggregatedCounts = { Positive: 0, Neutral: 0, Negative: 0, Suggestive: 0 };
+      let total = 0;
+      let allComments: Array<{ comment: string; confidence: number }> = [];
 
-    const record = data.records?.[0] || {
-      sentiment_analysis: {
-        counts: { Positive: 0, Neutral: 0, Negative: 0, Suggestive: 0 },
-        percentages: { Positive: 0, Neutral: 0, Negative: 0, Suggestive: 0 },
-        total_comments: 0
+      for (const title of titles) {
+        const recordsRes = await fetch(`http://localhost:8000/records/${encodeURIComponent(title)}`);
+        if (!recordsRes.ok) continue;
+        const data = await recordsRes.json();
+
+        const records = data.records || [];
+        for (const record of records) {
+          const individualResults = record?.sentiment_analysis?.individual_results || [];
+          for (const result of individualResults) {
+            if (result?.sentiment) {
+              const sentiment = result.sentiment;
+              if (aggregatedCounts[sentiment as keyof typeof aggregatedCounts] !== undefined) {
+                aggregatedCounts[sentiment as keyof typeof aggregatedCounts] += 1;
+                total += 1;
+              }
+            }
+            
+            if (result?.comment && typeof result.comment === 'string' && result?.confidence) {
+              allComments.push({
+                comment: result.comment,
+                confidence: result.confidence
+              });
+            }
+          }
+        }
       }
-    };
 
-    const processedData = Object.entries(record.sentiment_analysis.percentages).map(
-      ([category, value]) => ({
-        category,
+      const processedData = Object.entries(aggregatedCounts).map(([category, value]) => ({
+        name: category,
         value: Number(value),
-        count: record.sentiment_analysis.counts[category],
-        color: getSentimentColor(category)
-      })
-    );
+      }));
 
-    setSentimentData(processedData);
-    setTotalComments(record.sentiment_analysis.total_comments);
-  } catch (err) {
-    console.error('Failed to fetch sentiment data:', err);
-  } finally {
-    setLoadingSentiment(false);
-  }
-};
-
+      setSentimentData(processedData);
+      setTotalComments(total);
+      
+      const sortedComments = allComments
+        .sort((a, b) => b.confidence - a.confidence)
+        .map(item => item.comment);
+      
+      const uniqueComments = Array.from(new Set(sortedComments)).filter(c => c.trim().length > 0);
+      setTopComments(uniqueComments.slice(0, 5));
+      
+      console.log("✅ Sentiment Data:", processedData);
+      console.log("✅ Total Comments:", total);
+    } catch (err) {
+      console.error('❌ Failed to fetch sentiment data:', err);
+    } finally {
+      setLoadingSentiment(false);
+    }
+  };
 
   useEffect(() => {
-    // Simulate initial loading
     const timer = setTimeout(() => setIsLoading(false), 1500);
     return () => clearTimeout(timer);
   }, []);
 
-  // ✅ Fetch list of sources from FastAPI
   useEffect(() => {
     async function fetchSources() {
       try {
@@ -88,43 +106,8 @@ const fetchSentimentData = async (source: string) => {
   }, []);
 
   useEffect(() => {
-  fetchSentimentData(selectedSource);
-}, [selectedSource]);
-
-
-
-  useEffect(() => {
-  if (sourceTitles.length > 0 && !selectedSource) {
-    setSelectedSource(sourceTitles[0]);
-  }
-}, [sourceTitles]);
-
-  useEffect(() => {
-  async function fetchWordcloud(source: string) {
-    if (!source) return;
-    setLoadingWordcloud(true);
-    try {
-      const res = await fetch(`http://localhost:8000/records/${encodeURIComponent(source)}`);
-      const data = await res.json();
-      const record = data.records && data.records.length > 0 ? data.records[0] : null;
-      if (record?.wordcloud_base64) {
-        setWordcloudImage(`data:image/png;base64,${record.wordcloud_base64}`);
-      } else {
-        setWordcloudImage('');
-      }
-    } catch (err) {
-      console.error('Failed to fetch wordcloud:', err);
-      setWordcloudImage('');
-    } finally {
-      setLoadingWordcloud(false);
-    }
-  }
-
-  if (selectedSource) {
-    fetchWordcloud(selectedSource);
-  }
-}, [selectedSource]);
-
+    fetchGlobalSentimentData();
+  }, []);
 
   if (isLoading) {
     return (
@@ -163,98 +146,91 @@ const fetchSentimentData = async (source: string) => {
 
   return (
     <div className="p-6 space-y-6">
-      {/* ✅ Dropdown filter */}
-      <div className="flex items-center justify-between mb-4">
-        {/*<h2 className="text-lg font-semibold text-gray-800">Dashboard Overview</h2> */}
-        <div className="flex items-center justify-start mb-4">
-          <select
-            id="source-select"
-            className="px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={selectedSource}
-            onChange={(e) => setSelectedSource(e.target.value)}
-          >
-            {sourceTitles.map((title, idx) => (
-              <option key={idx} value={title}>
-                {title}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6"> 
-      
+      {/* Sentiment Analysis and User Voices */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Sentiment Analysis Chart */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
-              Sentiment Analysis Overview
+              Overall Sentiment Analysis
               <Badge variant="outline" className="bg-blue-50 text-blue-700">
                 Real-time
               </Badge>
             </CardTitle>
             <CardDescription>
-              Public sentiment distribution across all active regulations
-            </CardDescription>
-          </CardHeader>
-            <CardContent>
-            {loadingSentiment ? (
-              <Skeleton className="h-64 w-full" />
-            ) : (
-              <div className="space-y-4">
-                {sentimentData.map((item, idx) => (
-                  <div key={idx} className="space-y-1">
-                    <div className="flex items-center justify-between text-sm">
-                      <div className="flex items-center space-x-2">
-                        <div className={`w-3 h-3 rounded-full ${item.color}`}></div>
-                        <span className="text-sm font-medium">{item.category}</span>
-                      </div>
-                      <span className="text-sm font-bold">{item.value}%</span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div
-                        className={`h-2 rounded-full ${item.color}`}
-                        style={{ width: `${item.value}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-                <p className="text-xs text-gray-500 mt-1">
-                  Total Comments Analyzed: {totalComments}
-                </p>
-              </div>
-            )}
-          </CardContent>
-
-        </Card>
-
-        {/* Word Cloud Placeholder */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Key Topics & Themes</CardTitle>
-            <CardDescription>
-              Most frequently mentioned topics in public feedback
+              Aggregated sentiment distribution across all public feedback
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg p-6 h-64 flex items-center justify-center">
-              {loadingWordcloud ? (
-                <Skeleton className="h-48 w-full" />
-              ) : wordcloudImage ? (
-                <img 
-                  src={wordcloudImage} 
-                  alt="Word Cloud" 
-                  className="max-w-full max-h-full object-contain rounded"
-                />
-              ) : (
-                <div className="text-center text-gray-500">
-                  <MessageSquare className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                  <p>Word cloud not available</p>
+            {loadingSentiment ? (
+              <Skeleton className="h-64 w-full" />
+            ) : (
+              <div className="h-72 relative">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={sentimentData}
+                      dataKey="value"
+                      cx="50%"
+                      cy="45%"
+                      outerRadius={100}
+                      innerRadius={60}
+                      label={false}
+                    >
+                      {sentimentData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={SENTIMENT_COLORS[entry.name] || '#gray-400'} />
+                      ))}
+                    </Pie>
+
+                    <Tooltip />
+                    <Legend
+                      verticalAlign="bottom"
+                      height={50}
+                      iconType="circle"
+                      formatter={(value, entry: any) => (
+                        <span className="text-sm">
+                          <span className="font-semibold">{value}</span>: {entry.payload.value}
+                        </span>
+                      )}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="absolute top-0 left-0 w-full h-full flex items-center justify-center pointer-events-none" style={{ paddingBottom: '72px' }}>
+                  <div className="text-center">
+                    <p className="text-3xl font-bold text-gray-900">{totalComments}</p>
+                  </div>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
+        {/* User Voices */}
+        <Card>
+          <CardHeader>
+            <CardTitle>User Voices</CardTitle>
+            <CardDescription>Real user comments from public feedback</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {topComments.length === 0 ? (
+              <div className="flex items-center justify-center h-72 text-gray-500 italic">
+                <MessageSquare className="h-12 w-12 opacity-50 mr-3" />
+                <p>No comments available yet.</p>
+              </div>
+            ) : (
+              <ul className="space-y-4 h-72 overflow-y-auto">
+                {topComments.map((comment, idx) => (
+                  <li
+                    key={`comment-${idx}-${comment.substring(0, 20)}`}
+                    className="italic text-gray-700 border-l-4 border-blue-500 pl-4 text-sm"
+                  >
+                    "{comment}"
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Recent Activity */}
@@ -278,30 +254,32 @@ const fetchSentimentData = async (source: string) => {
                 title: 'New regulation feedback received',
                 description: 'Healthcare Policy Reform - 47 new responses',
                 time: '2 minutes ago',
-                type: 'feedback',
-                icon: MessageSquare
+                icon: MessageSquare,
               },
               {
                 title: 'Analysis report generated',
                 description: 'Environmental Protection Guidelines - Sentiment Analysis',
                 time: '15 minutes ago',
-                type: 'report',
-                icon: BarChart3
+                icon: BarChart3,
               },
               {
                 title: 'Weekly summary available',
                 description: 'Public Transport Regulations - Week 12 Summary',
                 time: '1 hour ago',
-                type: 'summary',
-                icon: FileText
+                icon: FileText,
+              },
+              {
+                title: 'Positive feedback surge',
+                description: 'Digital India Initiative - 89% positive sentiment increase',
+                time: '2 hours ago',
+                icon: TrendingUp,
               },
               {
                 title: 'Trend alert triggered',
                 description: 'Negative sentiment spike detected in Education Policy',
                 time: '3 hours ago',
-                type: 'alert',
-                icon: TrendingDown
-              }
+                icon: TrendingDown,
+              },
             ].map((activity, index) => {
               const Icon = activity.icon;
               return (
@@ -324,41 +302,10 @@ const fetchSentimentData = async (source: string) => {
         </CardContent>
       </Card>
 
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="cursor-pointer hover:shadow-md transition-shadow">
-          <CardContent className="p-6 text-center">
-            <BarChart3 className="h-8 w-8 mx-auto mb-4 text-blue-600" />
-            <h3 className="font-semibold text-gray-900 mb-2">Generate Report</h3>
-            <p className="text-sm text-gray-600 mb-4">Create comprehensive analysis reports</p>
-            <Button size="sm" className="w-full" onClick={() => router.push('/reports')}>
-              Create Report
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card className="cursor-pointer hover:shadow-md transition-shadow">
-          <CardContent className="p-6 text-center">
-            <TrendingUp className="h-8 w-8 mx-auto mb-4 text-green-600" />
-            <h3 className="font-semibold text-gray-900 mb-2">View Analysis</h3>
-            <p className="text-sm text-gray-600 mb-4">Explore detailed sentiment analysis</p>
-            <Button size="sm" variant="outline" className="w-full" onClick={() => router.push('/analysis')}>
-              View Analysis
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card className="cursor-pointer hover:shadow-md transition-shadow">
-          <CardContent className="p-6 text-center">
-            <Users className="h-8 w-8 mx-auto mb-4 text-purple-600" />
-            <h3 className="font-semibold text-gray-900 mb-2">Manage Settings</h3>
-            <p className="text-sm text-gray-600 mb-4">Configure platform preferences</p>
-            <Button size="sm" variant="outline" className="w-full" onClick={() => router.push('/settings')}>
-              Open Settings
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Footer */}
+      <footer className="text-center py-6 mt-8 border-t">
+        <p className="text-sm text-gray-600">©️ JanMatra 2025</p>
+      </footer>
     </div>
   );
 }
